@@ -1,0 +1,6 @@
+# Source-pinned simulator backend checkout and all generated build products.
+/.build/
+output/
+docs/
+plans/
+scripts/
