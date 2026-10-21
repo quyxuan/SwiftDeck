@@ -205,6 +205,86 @@ struct DashboardViewModelTests {
         #expect(model.errorMessage == nil)
     }
 
+    @Test func screenshotShortcutTargetsBootedProjectDestinationOnly() async throws {
+        let phone = simulator("Phone", status: .booted)
+        let ipad = simulator("iPad", status: .available)
+        let service = ControlledSimulatorService([phone, ipad])
+        let model = makeModel([project("App", destination: phone.id)], simulatorService: service)
+        await model.refreshSimulators()
+        #expect(model.screenshotSimulatorID == phone.id)
+        model.setSimulator(ipad.id)
+        #expect(model.screenshotSimulatorID == nil)
+        service.inventory[1].status = .booted
+        await model.refreshSimulators()
+        #expect(model.screenshotSimulatorID == ipad.id)
+        model.takeScreenshot()
+        #expect(model.screenshotFeedback?.id == nil)
+        try await waitUntil { service.screenshotDestinations.count == 1 }
+        try await waitUntil { !model.hasActiveOperations }
+        let firstFeedback = try #require(model.screenshotFeedback)
+        #expect(firstFeedback.message == "Screenshot saved")
+        model.takeScreenshot()
+        try await waitUntil { service.screenshotDestinations.count == 2 }
+        try await waitUntil { !model.hasActiveOperations }
+        let secondFeedback = try #require(model.screenshotFeedback)
+        #expect(secondFeedback.id != firstFeedback.id)
+        model.dismissScreenshotFeedback(firstFeedback.id)
+        #expect(model.screenshotFeedback?.id == secondFeedback.id)
+        let shots = service.screenshotDestinations
+        #expect(shots.map(\.0) == [ipad.id, ipad.id])
+        #expect(shots[0].1 != shots[1].1)
+        #expect(shots.allSatisfy {
+            $0.1.deletingLastPathComponent() == FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+                && $0.1.pathExtension == "png"
+        })
+        model.selectProject(nil)
+        model.takeScreenshot()
+        #expect(model.screenshotSimulatorID == nil && service.screenshotDestinations.count == 2)
+    }
+
+    @Test func copyScreenshotPutsPNGOnClipboardAndRemovesTemporaryCapture() async throws {
+        let pasteboard = NSPasteboard.general
+        let previous: [NSPasteboardItem] = pasteboard.pasteboardItems?.map { item in
+            let saved = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { _ = saved.setData(data, forType: type) }
+            }
+            return saved
+        } ?? []
+        defer {
+            pasteboard.clearContents()
+            if !previous.isEmpty {
+                let items: [any NSPasteboardWriting] = previous.map { $0 }
+                _ = pasteboard.writeObjects(items)
+            }
+        }
+        let phone = simulator("Phone", status: .booted)
+        let service = ControlledSimulatorService([phone])
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        service.screenshotData = png
+        let model = makeModel([project("App", destination: phone.id)], simulatorService: service)
+        await model.refreshSimulators()
+
+        model.copyScreenshot()
+        try await waitUntil { !model.hasActiveOperations }
+        let feedback = try #require(model.screenshotFeedback)
+        #expect(feedback.message == "Screenshot copied to clipboard")
+        let capture = try #require(service.screenshotDestinations.first)
+        #expect(capture.0 == phone.id)
+        #expect(capture.1.deletingLastPathComponent() == FileManager.default.temporaryDirectory)
+        #expect(!FileManager.default.fileExists(atPath: capture.1.path))
+        #expect(pasteboard.data(forType: .png) == png)
+        service.screenshotData = nil
+        model.copyScreenshot()
+        try await waitUntil { !model.hasActiveOperations }
+        #expect(model.screenshotFeedback?.id == nil)
+        #expect(model.errorMessage?.contains("Copying Screenshot failed") == true)
+    }
+
     @Test func unavailableInventoryAllowsBuildButNotRun() async throws {
         let service = ControlledBuildService()
         defer { service.releaseAll() }
@@ -304,6 +384,65 @@ struct DashboardViewModelTests {
         #expect(model.selectedProjectID == nil && !model.canBuild)
     }
 
+    @Test func rerunWaitsForCancelledBuildAndStopDiscardsQueuedRun() async throws {
+        let build = ControlledBuildService()
+        let phone = simulator("Phone")
+        let sim = ControlledSimulatorService([phone])
+        defer { build.releaseAll(); sim.releaseAll() }
+        let model = makeModel([project("App", destination: phone.id)], service: build, simulatorService: sim)
+        await model.refreshSimulators()
+        model.build()
+        try await waitUntil { build.requests.count == 1 }
+        #expect(model.canRun)
+        model.run()
+        #expect(model.isStopping && model.canStop)
+        #expect(build.requests.count == 1)
+        model.stop()
+        build.complete(0, error: CancellationError())
+        try await waitUntil { !model.hasActiveOperations }
+        #expect(build.requests.count == 1 && sim.requests.isEmpty)
+
+        model.build()
+        try await waitUntil { build.requests.count == 2 }
+        model.run()
+        build.complete(1, error: CancellationError())
+        try await waitUntil { build.requests.count == 3 }
+        #expect(build.requests[2].simulatorID == phone.id)
+        build.complete(2)
+        try await waitUntil { sim.requests.count == 1 }
+        sim.complete(0)
+        try await waitUntil { !model.hasActiveOperations }
+    }
+
+    @Test func rerunRunningAppWaitsForDeviceCleanup() async throws {
+        let build = ControlledBuildService()
+        let phone = simulator("Phone")
+        let sim = ControlledSimulatorService([phone])
+        defer { build.releaseAll(); sim.releaseAll() }
+        let model = makeModel([project("App", destination: phone.id)], service: build, simulatorService: sim)
+        await model.refreshSimulators()
+        model.run()
+        try await waitUntil { build.requests.count == 1 }
+        build.complete(0)
+        try await waitUntil { sim.requests.count == 1 }
+        sim.launch(0)
+        #expect(model.canRun && model.canBuild)
+        model.run()
+        #expect(build.requests.count == 1)
+        sim.complete(0, error: CancellationError())
+        try await waitUntil { build.requests.count == 2 }
+        build.complete(1)
+        try await waitUntil { sim.requests.count == 2 }
+        sim.launch(1)
+        model.build()
+        #expect(build.requests.count == 2)
+        sim.complete(1, error: CancellationError())
+        try await waitUntil { build.requests.count == 3 }
+        build.complete(2)
+        try await waitUntil { !model.hasActiveOperations }
+        #expect(sim.requests.count == 2 && model.selectedProject?.status == .idle)
+    }
+
     @Test func runAwaitsLaunchAndExitWithCapturedSettings() async throws {
         let build = ControlledBuildService()
         let original = simulator("Original")
@@ -331,7 +470,7 @@ struct DashboardViewModelTests {
         #expect(model.selectedProject?.status == .running && model.canStop)
         #expect(model.simulators.first(where: { $0.id == original.id })?.status == .booted)
         #expect(model.simulators.first(where: { $0.id == replacement.id })?.status == .available)
-        #expect(!model.canBuild && !model.canClean)
+        #expect(model.canBuild && !model.canClean)
         sim.complete(0)
         try await waitUntil { !model.hasActiveOperations }
         #expect(model.selectedProject?.status == .stopped && model.canBuild)
@@ -358,7 +497,7 @@ struct DashboardViewModelTests {
         try await waitUntil { model.runningAppConfirmation != nil }
         let confirmation = try #require(model.runningAppConfirmation)
         #expect(confirmation.projectID == apps[0].id)
-        #expect(!model.canBuild && model.canStop)
+        #expect(model.canBuild && model.canStop)
         #expect(!otherWindow.canBuild && !otherWindow.canRun)
         #expect(!otherWindow.canSimulatorAction(.shutdown, on: original.id))
         #expect(otherWindow.canSimulatorAction(.shutdown, on: replacement.id))
@@ -773,7 +912,7 @@ struct DashboardViewModelTests {
         model.clean()
         try await waitUntil { service.requests.count == 2 }
         #expect(service.cleanRequests == [1])
-        #expect(!model.canBuild && model.canStop)
+        #expect(model.canBuild && !model.canClean && model.canStop)
         service.complete(1, error: ServiceFailure())
         try await waitUntil { !model.hasActiveOperations }
         #expect(model.selectedProject?.status == .failed)
@@ -1534,6 +1673,7 @@ private final class ControlledSimulatorService: SimulatorServiceProtocol {
     private(set) var openedTargets: [UUID?] = []
     private(set) var openedURLs: [(URL, UUID)] = []
     private(set) var screenshotDestinations: [(UUID, URL)] = []
+    var screenshotData: Data?
     var inventoryPending: CheckedContinuation<[SimulatorModel], any Error>?
     var openPending: CheckedContinuation<Void, any Error>?
     var cleanupRetryError: (any Error)?
@@ -1589,6 +1729,7 @@ private final class ControlledSimulatorService: SimulatorServiceProtocol {
 
     func screenshot(_ simulatorID: UUID, to url: URL) async throws {
         screenshotDestinations.append((simulatorID, url))
+        if let screenshotData { try screenshotData.write(to: url) }
     }
 
     func openURL(_ url: URL, on simulatorID: UUID) async throws {

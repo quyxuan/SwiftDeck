@@ -16,6 +16,8 @@ struct ShortcutStoreTests {
         let restarted = ShortcutStore(defaults: fixture.defaults)
         #expect(restarted[.build] == custom)
         #expect(restarted[.run] == ShortcutAction.run.defaultBinding)
+        #expect(restarted[.screenshot] == ShortcutBinding(key: "s"))
+        #expect(restarted[.copyScreenshot] == ShortcutBinding(key: "i", modifiers: [.command, .shift]))
 
         restarted.restoreDefaults()
         let restored = ShortcutStore(defaults: fixture.defaults)
@@ -35,6 +37,9 @@ struct ShortcutStoreTests {
         #expect(error?.contains(ShortcutAction.run.title) == true)
         #expect(store[.build] == custom)
         #expect(ShortcutStore(defaults: fixture.defaults)[.build] == custom)
+        #expect(store.set(ShortcutBinding(key: "s"), for: .build)?.contains("Take Simulator Screenshot") == true)
+        #expect(store.set(ShortcutBinding(key: "i", modifiers: [.command, .shift]), for: .build)?
+            .contains("Copy Simulator Screenshot") == true)
         // An action may keep its own binding; this is not a conflict.
         #expect(store.set(custom, for: .build) == nil)
     }

@@ -37,24 +37,8 @@ final class AppPreferences: ObservableObject {
         }
     }
 
-    @Published var automaticallyExpandBuildLog: Bool {
-        didSet {
-            guard automaticallyExpandBuildLog != oldValue else { return }
-            defaults.set(automaticallyExpandBuildLog, forKey: Key.automaticallyExpandBuildLog)
-        }
-    }
-
-    @Published var followBuildOutput: Bool {
-        didSet {
-            guard followBuildOutput != oldValue else { return }
-            defaults.set(followBuildOutput, forKey: Key.followBuildOutput)
-        }
-    }
-
     private enum Key {
         static let appearance = "settings.appearance"
-        static let automaticallyExpandBuildLog = "settings.automaticallyExpandBuildLog"
-        static let followBuildOutput = "settings.followBuildOutput"
     }
 
     private let defaults: UserDefaults
@@ -63,7 +47,5 @@ final class AppPreferences: ObservableObject {
         self.defaults = defaults
         appearance = defaults.string(forKey: Key.appearance)
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
-        automaticallyExpandBuildLog = defaults.object(forKey: Key.automaticallyExpandBuildLog) as? Bool ?? true
-        followBuildOutput = defaults.object(forKey: Key.followBuildOutput) as? Bool ?? true
     }
 }

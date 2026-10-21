@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import CoreImage
+import FBSimulatorControl
 import ImageIO
 import IOSurface
 import MetalKit
@@ -32,7 +33,7 @@ struct EmbeddedSimulatorView: View {
     var body: some View {
         VStack(spacing: 0) {
             GeometryReader { geometry in
-                toolbar(compact: geometry.size.width < 560)
+                toolbar(compact: geometry.size.width < 760)
             }
             .frame(height: 50)
             .background(Color(white: 0.04))
@@ -91,7 +92,7 @@ struct EmbeddedSimulatorView: View {
     }
 
     private func toolbar(compact: Bool) -> some View {
-        HStack(spacing: compact ? 8 : 10) {
+        HStack(spacing: compact ? 6 : 10) {
             Image(systemName: "iphone")
                 .foregroundStyle(.white.opacity(0.8))
                 .accessibilityHidden(true)
@@ -126,6 +127,32 @@ struct EmbeddedSimulatorView: View {
             .help("Rotate the physical device clockwise. Apps may lock their interface orientation.")
             .accessibilityLabel("Rotate simulator clockwise")
             Button {
+                session.pressHardwareButton(.volumeDown)
+            } label: {
+                Image(systemName: "speaker.minus").frame(width: 14, height: 18)
+            }
+            .disabled(!session.isReady || session.isRotating || displayError != nil)
+            .help("Turn down Simulator volume")
+            .accessibilityLabel("Simulator volume down")
+            Button {
+                session.pressHardwareButton(.volumeUp)
+            } label: {
+                Image(systemName: "speaker.plus").frame(width: 14, height: 18)
+            }
+            .disabled(!session.isReady || session.isRotating || displayError != nil)
+            .help("Turn up Simulator volume")
+            .accessibilityLabel("Simulator volume up")
+            Button {
+                session.toggleSilent()
+            } label: {
+                Image(systemName: session.isSilent == true ? "bell.slash.fill" : "bell")
+                    .frame(width: 14, height: 18)
+            }
+            .disabled(!session.isReady || session.isRotating || session.isChangingSilent || displayError != nil)
+            .help("Toggle Simulator Silent Mode")
+            .accessibilityLabel("Toggle Simulator Silent Mode")
+            .accessibilityValue(session.isSilent.map { $0 ? "On" : "Off" } ?? "Unknown")
+            Button {
                 resetInput()
                 session.pressHome()
             } label: {
@@ -134,6 +161,15 @@ struct EmbeddedSimulatorView: View {
             .disabled(!session.isReady || session.isRotating || displayError != nil)
             .help("Go to the simulator Home screen")
             .accessibilityLabel("Simulator Home")
+            Button {
+                resetInput()
+                session.pressHardwareButton(.lock)
+            } label: {
+                Image(systemName: "power").frame(width: 14, height: 18)
+            }
+            .disabled(!session.isReady || session.isRotating || displayError != nil)
+            .help("Press the Simulator power button to lock or wake the screen")
+            .accessibilityLabel("Simulator power button")
             Menu {
                 Button("Disconnect", systemImage: "rectangle.portrait.and.arrow.right") {
                     resetInput()
@@ -149,12 +185,12 @@ struct EmbeddedSimulatorView: View {
                       ? "Shut down the simulator and stop all its apps"
                       : "Shutdown is unavailable while another operation uses this simulator")
             } label: {
-                Image(systemName: "power").frame(width: 14, height: 18)
+                Image(systemName: "ellipsis").frame(width: 14, height: 18)
             }
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Disconnect the display or shut down the simulator")
-            .accessibilityLabel("Simulator power options")
+            .accessibilityLabel("Simulator display options")
         }
         .font(.system(size: 12))
         .foregroundStyle(.white.opacity(0.92))

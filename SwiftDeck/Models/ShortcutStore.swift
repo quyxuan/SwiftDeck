@@ -7,7 +7,7 @@ nonisolated enum ShortcutAction: String, CaseIterable, Codable, Identifiable, Se
     case openProject, switchProject, quickBuild
     case selectProject1, selectProject2, selectProject3, selectProject4, selectProject5
     case selectProject6, selectProject7, selectProject8, selectProject9
-    case previousProject, nextProject, build, run, stop, clean
+    case previousProject, nextProject, build, run, stop, clean, screenshot, copyScreenshot
 
     var id: String { rawValue }
 
@@ -27,6 +27,8 @@ nonisolated enum ShortcutAction: String, CaseIterable, Codable, Identifiable, Se
         case .run: "Run"
         case .stop: "Stop"
         case .clean: "Clean Build Folder"
+        case .screenshot: "Take Simulator Screenshot"
+        case .copyScreenshot: "Copy Simulator Screenshot"
         default: "Select Project \(Self.projectSelections.firstIndex(of: self)! + 1)"
         }
     }
@@ -42,6 +44,8 @@ nonisolated enum ShortcutAction: String, CaseIterable, Codable, Identifiable, Se
         case .run: ShortcutBinding(key: "r")
         case .stop: ShortcutBinding(key: ".")
         case .clean: ShortcutBinding(key: "k", modifiers: [.command, .shift])
+        case .screenshot: ShortcutBinding(key: "s")
+        case .copyScreenshot: ShortcutBinding(key: "i", modifiers: [.command, .shift])
         default: ShortcutBinding(key: String(Self.projectSelections.firstIndex(of: self)! + 1))
         }
     }
@@ -138,7 +142,7 @@ nonisolated struct ShortcutBinding: Codable, Hashable, Sendable {
         }
         // Keep standard app, editing, text-navigation, and window shortcuts available.
         if ["c", "x", "v", "a", "z", "q", "w", "h", "m", ",", "`"].contains(key)
-            || (modifiers == .command && ["n", "s", "f", "g", "e", "t"].contains(key))
+            || (modifiers == .command && ["n", "f", "g", "e", "t"].contains(key))
             || (modifiers == [.command, .shift] && ["s", "g", "t", "/"].contains(key))
             || (modifiers == [.command, .control] && ["f", "s"].contains(key))
             || ((modifiers == .command || modifiers == [.command, .shift])

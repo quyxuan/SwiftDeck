@@ -31,10 +31,10 @@ struct SwiftDeckCommands: Commands {
                 .keyboardShortcut(shortcuts[.nextProject].keyboardShortcut)
                 .disabled(model?.canChooseProject != true || model?.projects.isEmpty != false)
             Divider()
-            Button(ShortcutAction.build.title) { model?.build() }
+            Button(model?.operationLabel == nil ? ShortcutAction.build.title : "Rebuild") { model?.build() }
                 .keyboardShortcut(shortcuts[.build].keyboardShortcut)
                 .disabled(model?.canBuild != true)
-            Button(ShortcutAction.run.title) { model?.run() }
+            Button(model?.operationLabel == nil ? ShortcutAction.run.title : "Rerun") { model?.run() }
                 .keyboardShortcut(shortcuts[.run].keyboardShortcut)
                 .disabled(model?.canRun != true)
             Button(ShortcutAction.stop.title) { model?.stop() }
@@ -44,6 +44,14 @@ struct SwiftDeckCommands: Commands {
             Button(ShortcutAction.clean.title) { model?.clean() }
                 .keyboardShortcut(shortcuts[.clean].keyboardShortcut)
                 .disabled(model?.canClean != true)
+        }
+        CommandMenu("Simulator") {
+            Button(ShortcutAction.screenshot.title) { model?.takeScreenshot() }
+                .keyboardShortcut(shortcuts[.screenshot].keyboardShortcut)
+                .disabled(model?.screenshotSimulatorID == nil)
+            Button(ShortcutAction.copyScreenshot.title) { model?.copyScreenshot() }
+                .keyboardShortcut(shortcuts[.copyScreenshot].keyboardShortcut)
+                .disabled(model?.screenshotSimulatorID == nil)
         }
         SidebarCommands()
     }

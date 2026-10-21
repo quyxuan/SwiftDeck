@@ -29,7 +29,6 @@ final class DashboardViewModel: ObservableObject {
             }
         }
     }
-    @Published var isLogExpanded = false
     @Published var projectPickerMode: ProjectPickerMode?
     @Published var projectImportSelection: ProjectImportSelection?
     @Published var simulatorDetails: SimulatorModel?
@@ -42,6 +41,7 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var isImporting = false
     @Published private(set) var isRefreshing = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var screenshotFeedback: (id: UUID, message: String)?
     @Published private var operations: [UUID: Operation] = [:]
     @Published private var isShuttingDown = false
     @Published private var isOpeningSimulator = false
@@ -77,6 +77,7 @@ final class DashboardViewModel: ObservableObject {
         var label: String
         let simulatorLease: SimulatorOperationRegistry.Lease?
         var stopping = false
+        var queuedIntent: Intent?
         var removing = false
     }
 
@@ -167,8 +168,13 @@ final class DashboardViewModel: ObservableObject {
     }
 
     var canBuild: Bool {
-        guard let selectedProjectID else { return false }
-        return canBuildProject(selectedProjectID)
+        guard let project = selectedProject else { return false }
+        if let operation = operations[project.id] {
+            return !isShuttingDown && !operation.stopping && !operation.removing
+                && project.schemes.contains(project.scheme)
+                && project.configurations.contains(project.configuration)
+        }
+        return canBuildProject(project)
     }
 
     func canBuildProject(_ id: UUID) -> Bool {
@@ -190,10 +196,13 @@ final class DashboardViewModel: ObservableObject {
 
     var canStop: Bool {
         guard let selectedProjectID, let operation = operations[selectedProjectID] else { return false }
-        return !operation.stopping && !isShuttingDown
+        return (!operation.stopping || operation.queuedIntent != nil) && !isShuttingDown
     }
 
-    var canClean: Bool { canBuild }
+    var canClean: Bool {
+        guard let selectedProjectID else { return false }
+        return canBuildProject(selectedProjectID)
+    }
     var canRemove: Bool {
         guard let selectedProjectID else { return false }
         return !isShuttingDown && operations[selectedProjectID]?.removing != true
@@ -304,6 +313,30 @@ final class DashboardViewModel: ObservableObject {
         case .show, .screenshot, .openURL:
             return simulator.status == .booted && registry.canAcquire(.utility, on: id)
         }
+    }
+
+    var screenshotSimulatorID: UUID? {
+        guard let id = embeddedSimulator?.device.id ?? selectedProject?.selectedSimulatorID,
+              canSimulatorAction(.screenshot, on: id) else { return nil }
+        return id
+    }
+
+    func takeScreenshot() {
+        guard let id = screenshotSimulatorID else { return }
+        let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop", isDirectory: true)
+        let filename = "Simulator Screenshot \(Int(Date().timeIntervalSince1970))-\(UUID().uuidString).png"
+        startDeviceAction(.screenshot, on: id, destination: desktop.appendingPathComponent(filename))
+    }
+
+    func copyScreenshot() {
+        guard let id = screenshotSimulatorID else { return }
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Simulator Screenshot \(UUID().uuidString).png")
+        startDeviceAction(.screenshot, on: id, destination: destination, copyToClipboard: true)
+    }
+
+    func dismissScreenshotFeedback(_ id: UUID) {
+        if screenshotFeedback?.id == id { screenshotFeedback = nil }
     }
 
     func performSimulatorAction(_ action: SimulatorDeviceAction, on id: UUID) {
@@ -435,7 +468,8 @@ final class DashboardViewModel: ObservableObject {
             && SimulatorOperationRegistry.shared.canAcquire(.run, on: simulator.id)
     }
 
-    private func startDeviceAction(_ action: SimulatorDeviceAction, on id: UUID, destination: URL? = nil) {
+    private func startDeviceAction(_ action: SimulatorDeviceAction, on id: UUID, destination: URL? = nil,
+                                   copyToClipboard: Bool = false) {
         guard canSimulatorAction(action, on: id), deviceTasks[id] == nil else { return }
         let label: String
         let kind: SimulatorOperationRegistry.Kind
@@ -447,11 +481,12 @@ final class DashboardViewModel: ObservableObject {
         case .show: label = "Opening Simulator"; kind = .utility
         case .shutdown: label = "Shutting Down"; kind = .management
         case .restart: label = "Restarting"; kind = .management
-        case .screenshot: label = "Saving Screenshot"; kind = .utility
+        case .screenshot: label = copyToClipboard ? "Copying Screenshot" : "Saving Screenshot"; kind = .utility
         case .openURL: label = "Opening URL"; kind = .utility
         default: return
         }
         guard let lease = SimulatorOperationRegistry.shared.acquire(kind, on: id, label: label) else { return }
+        if action == .screenshot { screenshotFeedback = nil }
         let service = simulatorService
         deviceTasks[id] = Task { [weak self] in
             defer {
@@ -470,13 +505,31 @@ final class DashboardViewModel: ObservableObject {
                 case .restart: try await service.restart(id)
                 case .screenshot:
                     guard let destination else { return }
+                    defer {
+                        if copyToClipboard { try? FileManager.default.removeItem(at: destination) }
+                    }
                     try await service.screenshot(id, to: destination)
+                    if copyToClipboard {
+                        try Task.checkCancellation()
+                        let image = try Data(contentsOf: destination)
+                        NSPasteboard.general.clearContents()
+                        guard NSPasteboard.general.setData(image, forType: .png) else {
+                            throw NSError(domain: "SwiftDeck", code: 1, userInfo: [
+                                NSLocalizedDescriptionKey: "Could not copy screenshot to clipboard."
+                            ])
+                        }
+                    }
                 case .openURL:
                     guard let destination else { return }
                     try await service.openURL(destination, on: id)
                 default: return
                 }
                 try Task.checkCancellation()
+                if action == .screenshot, self?.isShuttingDown == false {
+                    self?.screenshotFeedback = (
+                        UUID(), copyToClipboard ? "Screenshot copied to clipboard" : "Screenshot saved"
+                    )
+                }
             } catch {
                 actionFailed = true
                 if !Task.isCancelled && !(error is CancellationError) {
@@ -510,12 +563,22 @@ final class DashboardViewModel: ObservableObject {
 
     func build() {
         guard canBuild, let project = selectedProject else { return }
-        start(project, intent: .build)
+        if operations[project.id] != nil {
+            cancelOperation(project.id)
+            operations[project.id]?.queuedIntent = .build
+        } else {
+            start(project, intent: .build)
+        }
     }
 
     func run() {
         guard canRun, let project = selectedProject else { return }
-        start(project, intent: .run)
+        if operations[project.id] != nil {
+            cancelOperation(project.id)
+            operations[project.id]?.queuedIntent = .run
+        } else {
+            start(project, intent: .run)
+        }
     }
 
     func clean() {
@@ -809,16 +872,29 @@ final class DashboardViewModel: ObservableObject {
         let generation = nextGeneration
         projects[index].status = .building
         projects[index].issues.removeAll()
-        if AppPreferences.shared.automaticallyExpandBuildLog { isLogExpanded = true }
         appendLog(index, level: .info, message: "\(intent.label): \(context.scheme) · \(context.configuration).")
         let buildService = buildService
         let simulatorService = simulatorService
         let projectID = project.id
         let task = Task { [weak self] in
+            var error: (any Error)?
             defer {
+                let queued = self?.operations[projectID]?.queuedIntent
+                self?.finish(projectID, generation: generation, intent: intent, error: error)
                 if self?.cleanupBlockedProjects.contains(projectID) != true {
                     ProjectOperationRegistry.shared.release(projectID)
                     if let simulatorLease { SimulatorOperationRegistry.shared.release(simulatorLease) }
+                    if let self, let queued, let index = self.projectIndices[projectID],
+                       self.canBuildProject(self.projects[index]) {
+                        let project = self.projects[index]
+                        if queued == .build {
+                            self.start(project, intent: .build)
+                        } else if self.simulators.contains(where: {
+                            $0.id == project.selectedSimulatorID && self.isRunnable($0)
+                        }) {
+                            self.start(project, intent: .run)
+                        }
+                    }
                 }
             }
             let output: @MainActor (String) -> Void = { [weak self] line in
@@ -888,9 +964,8 @@ final class DashboardViewModel: ObservableObject {
                     }
                 }
                 try Task.checkCancellation()
-                self?.finish(projectID, generation: generation, intent: intent, error: nil)
-            } catch {
-                self?.finish(projectID, generation: generation, intent: intent, error: error)
+            } catch let caught {
+                error = caught
             }
         }
         operations[project.id] = Operation(
@@ -904,6 +979,7 @@ final class DashboardViewModel: ObservableObject {
 
     private func cancelOperation(_ id: UUID) {
         guard let operation = operations[id] else { return }
+        operations[id]?.queuedIntent = nil
         operations[id]?.stopping = true
         operations[id]?.label = "Stopping"
         operation.task.cancel()

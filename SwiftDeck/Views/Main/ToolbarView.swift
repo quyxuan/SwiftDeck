@@ -6,10 +6,10 @@ struct ToolbarView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(project.name).font(.title2.weight(.semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(project.name).font(.headline)
                     Text(project.path)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -19,28 +19,28 @@ struct ToolbarView: View {
                 .contentTransition(.opacity)
                 .animation(reduceMotion ? nil : DashboardMotion.content, value: project.id)
                 Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
+                HStack(spacing: 8) {
                     StatusBadgeView(status: project.status)
-                    Text(model.operationLabel ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(height: 16)
-                        .contentTransition(.opacity)
-                        .animation(reduceMotion ? nil : DashboardMotion.feedback, value: model.operationLabel)
+                    if let label = model.operationLabel {
+                        Text(label)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .contentTransition(.opacity)
+                            .animation(reduceMotion ? nil : DashboardMotion.feedback, value: label)
+                    }
                 }
             }
-            HStack(spacing: 16) {
+            HStack(spacing: 10) {
                 Picker("Scheme", selection: Binding(get: { project.scheme }, set: model.setScheme)) {
                     ForEach(project.schemes, id: \.self) { Text($0).tag($0) }
                 }
+                .frame(maxWidth: 170)
                 Picker("Configuration", selection: Binding(
                     get: { project.configuration }, set: model.setConfiguration
                 )) {
                     ForEach(project.configurations, id: \.self) { Text($0).tag($0) }
                 }
-                .frame(maxWidth: 210)
-            }
-            HStack(spacing: 16) {
+                .frame(maxWidth: 190)
                 Picker("Destination", selection: Binding(
                     get: { project.selectedSimulatorID }, set: model.setSimulator
                 )) {
@@ -56,12 +56,17 @@ struct ToolbarView: View {
                             .disabled(simulator.status == .unavailable)
                     }
                 }
+                .frame(maxWidth: .infinity)
             }
-            HStack(spacing: 10) {
-                Button(action: model.build) { Label("Build", systemImage: "hammer") }
-                    .disabled(!model.canBuild).help("Build selected project (⌘B)")
-                Button(action: model.run) { Label("Run", systemImage: "play.fill") }
-                    .disabled(!model.canRun).help("Run selected project (⌘R)")
+            HStack(spacing: 8) {
+                Button(action: model.build) {
+                    Label(model.operationLabel == nil ? "Build" : "Rebuild", systemImage: "hammer")
+                }
+                .disabled(!model.canBuild).help("Build selected project (⌘B); while busy, cancel and rebuild")
+                Button(action: model.run) {
+                    Label(model.operationLabel == nil ? "Run" : "Rerun", systemImage: "play.fill")
+                }
+                .disabled(!model.canRun).help("Run selected project (⌘R); while busy, cancel and rerun")
                 Button(action: model.stop) { Label("Stop", systemImage: "stop.fill") }
                     .disabled(!model.canStop).help("Stop selected project (⌘.)")
                 Button(action: model.clean) { Label("Clean", systemImage: "sparkles") }
@@ -88,8 +93,9 @@ struct ToolbarView: View {
                 .help("Reveal project, open the embedded simulator, or refresh devices")
             }
             .buttonStyle(.bordered)
-            .controlSize(.large)
+            .controlSize(.regular)
         }
-        .padding(24)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 }

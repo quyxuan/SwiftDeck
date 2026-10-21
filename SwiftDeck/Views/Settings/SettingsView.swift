@@ -8,9 +8,6 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            GeneralSettingsView(preferences: preferences)
-                .tabItem { Label("General", systemImage: "gearshape") }
-
             AppearanceSettingsView(preferences: preferences)
                 .tabItem { Label("Appearance", systemImage: "circle.lefthalf.filled") }
 
@@ -25,26 +22,6 @@ struct SettingsView: View {
         }
         .frame(minWidth: 640, idealWidth: 680, minHeight: 500, idealHeight: 540)
         .preferredColorScheme(preferences.appearance.colorScheme)
-    }
-}
-
-private struct GeneralSettingsView: View {
-    @ObservedObject var preferences: AppPreferences
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Automatically expand the build log", isOn: $preferences.automaticallyExpandBuildLog)
-                    .help("Show the build log when a build starts.")
-                Toggle("Follow build output", isOn: $preferences.followBuildOutput)
-                    .help("Scroll to the latest output as new build messages arrive.")
-            } header: {
-                Text("Build Log")
-            } footer: {
-                Text("Choose how the build log behaves while your projects build. You can always expand or collapse it manually.")
-            }
-        }
-        .formStyle(.grouped)
     }
 }
 

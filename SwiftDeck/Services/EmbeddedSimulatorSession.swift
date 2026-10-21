@@ -13,6 +13,8 @@ final class EmbeddedSimulatorSession: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRotating = false
     @Published var controlError: String?
+    @Published private(set) var isSilent: Bool?
+    @Published private(set) var isChangingSilent = false
     @Published private(set) var displaySize = CGSize(width: 390, height: 844)
     private(set) var surface: IOSurface?
     private(set) var pointSize = CGSize.zero
@@ -34,6 +36,7 @@ final class EmbeddedSimulatorSession: ObservableObject {
     private var geometryUpdates: Task<Void, Never>?
     private var inputWorker: Task<Void, Never>?
     private var rotationTask: Task<Void, Never>?
+    private var audioTask: Task<Void, Never>?
     private var closing: Task<Void, Never>?
     private var isClosing = false
     private var input: AsyncStream<InputOperation>.Continuation?
@@ -64,6 +67,7 @@ final class EmbeddedSimulatorSession: ObservableObject {
         frames?.cancel()
         geometryUpdates?.cancel()
         rotationTask?.cancel()
+        audioTask?.cancel()
         gesture?.finish()
         input?.finish()
         inputWorker?.cancel()
@@ -112,6 +116,7 @@ final class EmbeddedSimulatorSession: ObservableObject {
                 }
             }
             startInput()
+            if let settings = try? await backend.audioSettings() { isSilent = !settings.ringerEnabled }
             frames = Task { [weak self] in
                 for await surface in connection.surfaces {
                     if Task.isCancelled { break }
@@ -323,6 +328,37 @@ final class EmbeddedSimulatorSession: ObservableObject {
         enqueue(.shortButtonPress(.homeButton))
     }
 
+    func pressHardwareButton(_ button: SimulatorHIDButton) {
+        guard isReady, !isClosing, !isRotating else { return }
+        if case .lock = button { releaseInput() }
+        enqueue(.shortButtonPress(button))
+    }
+
+    func toggleSilent() {
+        guard isReady, !isClosing, !isRotating, !isChangingSilent else { return }
+        isChangingSilent = true
+        controlError = nil
+        audioTask = Task { [weak self, backend] in
+            guard let self else { return }
+            defer {
+                self.isChangingSilent = false
+                self.audioTask = nil
+            }
+            do {
+                let currentlySilent = !(try await backend.audioSettings().ringerEnabled)
+                try Task.checkCancellation()
+                try await backend.setRingerEnabled(currentlySilent)
+                try Task.checkCancellation()
+                guard !isClosing else { return }
+                isSilent = !currentlySilent
+            } catch {
+                if !Task.isCancelled && !isClosing {
+                    controlError = "Unable to change Silent Mode: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     func rotateClockwise() {
         guard isReady, !isClosing, !isRotating else { return }
         controlError = nil
@@ -495,6 +531,7 @@ final class EmbeddedSimulatorSession: ObservableObject {
         preparation?.cancel()
         let pendingPreparation = preparation
         rotationTask?.cancel()
+        audioTask?.cancel()
         let task = Task { @MainActor [self] in
             await pendingPreparation?.value
             releaseInput()
@@ -619,6 +656,14 @@ private actor EmbeddedSimulatorBackend {
 
     func setOrientation(_ orientation: SimulatorDeviceOrientation) async throws {
         try await target().orientation.set(orientation)
+    }
+
+    func audioSettings() async throws -> SimulatorAudioSettings {
+        try await target().audio.settings()
+    }
+
+    func setRingerEnabled(_ enabled: Bool) async throws {
+        try await target().audio.updateSettings(SimulatorAudioSettingsUpdate(ringerEnabled: enabled))
     }
 
     func send(_ event: SimulatorHIDEvent) async throws {

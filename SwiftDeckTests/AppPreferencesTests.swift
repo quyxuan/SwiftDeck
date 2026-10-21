@@ -5,25 +5,6 @@ import Testing
 @Suite("App preferences")
 @MainActor
 struct AppPreferencesTests {
-    @Test func disabledBuildLogPreferencesSurviveReload() throws {
-        let suiteName = "SwiftDeck-AppPreferencesTests-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let preferences = AppPreferences(defaults: defaults)
-
-        preferences.automaticallyExpandBuildLog = false
-        preferences.followBuildOutput = false
-
-        let restored = AppPreferences(defaults: defaults)
-        #expect(!restored.automaticallyExpandBuildLog)
-        #expect(!restored.followBuildOutput)
-
-        restored.automaticallyExpandBuildLog = true
-        let updated = AppPreferences(defaults: defaults)
-        #expect(updated.automaticallyExpandBuildLog)
-        #expect(!updated.followBuildOutput)
-    }
-
     @Test func invalidSavedAppearanceFallsBackAndCanBeReplaced() throws {
         let suiteName = "SwiftDeck-AppPreferencesTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

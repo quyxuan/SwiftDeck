@@ -10,6 +10,7 @@ struct DashboardView: View {
     @ObservedObject var model: DashboardViewModel
     @State private var presentedSheet: DashboardSheet?
     @State private var dismissingSheet: DashboardSheet?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let alert = alertPresentation
@@ -17,42 +18,78 @@ struct DashboardView: View {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 360)
         } detail: {
-            HSplitView {
-                VStack(spacing: 0) {
-                    if let project = model.selectedProject {
-                        ToolbarView(model: model, project: project)
-                        Divider()
-                        IssuePanelView(issues: project.issues, status: project.status)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        Divider()
-                        BuildLogView(store: model.logStore(for: project.id), isExpanded: $model.isLogExpanded)
-                            .id(project.id)
-                    } else {
-                        ContentUnavailableView {
-                            Label("No Project Selected", systemImage: "square.stack.3d.up")
-                        } description: {
-                            Text("Open an Xcode project, workspace, or containing folder to build and run on an iOS Simulator.")
-                        } actions: {
-                            Button("Open Project…", action: model.addProject)
-                                .disabled(model.isImporting)
-                        }
-                    }
+            VStack(spacing: 0) {
+                if let project = model.selectedProject {
+                    ToolbarView(model: model, project: project)
+                    Divider()
                 }
-                .frame(minWidth: 460, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
-                .background(.background)
                 if let session = model.embeddedSimulator {
                     EmbeddedSimulatorView(model: model, session: session)
                         .id(session.device.id)
-                        .frame(minWidth: 420, idealWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .disabled(model.isChangingEmbeddedSimulator)
+                } else if let id = model.selectedProject?.selectedSimulatorID {
+                    ContentUnavailableView {
+                        Label("Simulator not open", systemImage: "iphone")
+                    } description: {
+                        Text("Open the selected destination to view and control it here.")
+                    } actions: {
+                        Button("Open in SwiftDeck") { model.performSimulatorAction(.embed, on: id) }
+                            .disabled(!model.canSimulatorAction(.embed, on: id))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if model.selectedProject != nil {
+                    ContentUnavailableView {
+                        Label("No Simulator Selected", systemImage: "iphone")
+                    } description: {
+                        Text("Choose a destination to display its Simulator here.")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ContentUnavailableView {
+                        Label("No Project Selected", systemImage: "square.stack.3d.up")
+                    } description: {
+                        Text("Open an Xcode project, workspace, or containing folder to build and run on an iOS Simulator.")
+                    } actions: {
+                        Button("Open Project…", action: model.addProject)
+                            .disabled(model.isImporting)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(.background)
         }
         .navigationTitle("SwiftDeck")
         .navigationSubtitle("Local developer workspace")
-        .frame(minWidth: model.embeddedSimulator == nil ? 900 : 1240, minHeight: 600)
-        .task { await model.refreshSimulators() }
+        .frame(minWidth: 900, minHeight: 600)
+        .overlay(alignment: .top) {
+            if let feedback = model.screenshotFeedback {
+                Label(feedback.message, systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .shadow(radius: 8)
+                    .padding(.top, 12)
+                    .transition(.opacity.combined(with: .offset(y: -8)))
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(reduceMotion ? nil : DashboardMotion.content, value: model.screenshotFeedback?.id)
+        .task(id: model.screenshotFeedback?.id) {
+            guard let id = model.screenshotFeedback?.id else { return }
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { model.dismissScreenshotFeedback(id) }
+        }
+        .task {
+            await model.refreshSimulators()
+            if let id = model.selectedProject?.selectedSimulatorID,
+               model.embeddedSimulator == nil,
+               model.simulators.first(where: { $0.id == id })?.status == .booted {
+                model.performSimulatorAction(.embed, on: id)
+            }
+        }
         .onReceive(model.simulatorLaunches) { simulatorID in
             model.performSimulatorAction(.embed, on: simulatorID)
         }
